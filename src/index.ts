@@ -50,8 +50,123 @@ function selectWinner(events: Event[]): Event {
   return events[randomIndex];
 }
 
+// Main processing logic for events
+async function processEvents(env: Env): Promise<string> {
+  // Calculate date range for one week ahead
+  const now = new Date();
+  const oneWeekStart = new Date(now);
+  oneWeekStart.setDate(now.getDate() + 7);
+  oneWeekStart.setHours(0, 0, 0, 0);
+
+  const oneWeekEnd = new Date(oneWeekStart);
+  oneWeekEnd.setHours(23, 59, 59, 999);
+
+  // Convert to SQLite-compatible format (space instead of T, no Z)
+  const startStr = oneWeekStart.toISOString().replace('T', ' ').replace('Z', '');
+  const endStr = oneWeekEnd.toISOString().replace('T', ' ').replace('Z', '');
+
+  let logMessages: string[] = [];
+  logMessages.push(`Processing events between ${startStr} and ${endStr}`);
+
+  // Query events that have their start or end within one week from now
+  const query = `
+    SELECT id, start, end, status
+    FROM events
+    WHERE status = 'pending'
+      AND (
+        (start >= ? AND start <= ?)
+        OR (end >= ? AND end <= ?)
+        OR (start <= ? AND end >= ?)
+      )
+  `;
+
+  const { results: events } = await env.DB.prepare(query)
+    .bind(startStr, endStr, startStr, endStr, startStr, endStr)
+    .all<Event>();
+
+  if (!events || events.length === 0) {
+    const msg = "No pending events found for one week ahead";
+    console.log(msg);
+    logMessages.push(msg);
+    return logMessages.join('\n');
+  }
+
+  const msg = `Found ${events.length} events for processing`;
+  console.log(msg);
+  logMessages.push(msg);
+
+  // Group overlapping events
+  const groups = groupOverlappingEvents(events);
+  logMessages.push(`Grouped into ${groups.length} group(s)`);
+
+  // Process each group
+  for (const group of groups) {
+    if (group.length === 1) {
+      // No overlap, set status to confirm
+      await env.DB.prepare(
+        "UPDATE events SET status = 'confirm' WHERE id = ?"
+      ).bind(group[0].id).run();
+      const msg = `Event ${group[0].id} confirmed (no overlap)`;
+      console.log(msg);
+      logMessages.push(msg);
+    } else {
+      // Overlapping events - perform lottery
+      const winner = selectWinner(group);
+      const msg = `Group of ${group.length} overlapping events, winner: ${winner.id}`;
+      console.log(msg);
+      logMessages.push(msg);
+
+      // Set winner to confirm
+      await env.DB.prepare(
+        "UPDATE events SET status = 'confirm' WHERE id = ?"
+      ).bind(winner.id).run();
+
+      // Set losers to failed
+      const loserIds = group.filter(e => e.id !== winner.id).map(e => e.id);
+      if (loserIds.length > 0) {
+        const placeholders = loserIds.map(() => '?').join(',');
+        await env.DB.prepare(
+          `UPDATE events SET status = 'failed' WHERE id IN (${placeholders})`
+        ).bind(...loserIds).run();
+        const msg = `Events ${loserIds.join(', ')} failed (lost lottery)`;
+        console.log(msg);
+        logMessages.push(msg);
+      }
+    }
+  }
+
+  const finalMsg = "Event status update completed";
+  console.log(finalMsg);
+  logMessages.push(finalMsg);
+
+  return logMessages.join('\n');
+}
+
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // Test endpoint to manually trigger the scheduled logic
+    if (url.pathname === '/test-scheduled') {
+      const log = await processEvents(env);
+      
+      // Show results
+      const { results: allEvents } = await env.DB.prepare(
+        "SELECT id, start, end, status FROM events ORDER BY id"
+      ).all<Event>();
+
+      return new Response(
+        JSON.stringify({
+          log: log.split('\n'),
+          events: allEvents
+        }, null, 2),
+        {
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+
+    // Default endpoint
     const stmt = env.DB.prepare("SELECT * FROM comments LIMIT 3");
     const { results } = await stmt.all();
 
@@ -63,74 +178,6 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    // Calculate date range for one week ahead
-    const now = new Date();
-    const oneWeekStart = new Date(now);
-    oneWeekStart.setDate(now.getDate() + 7);
-    oneWeekStart.setHours(0, 0, 0, 0);
-
-    const oneWeekEnd = new Date(oneWeekStart);
-    oneWeekEnd.setHours(23, 59, 59, 999);
-
-    const startStr = oneWeekStart.toISOString();
-    const endStr = oneWeekEnd.toISOString();
-
-    // Query events that have their start or end within one week from now
-    const query = `
-      SELECT id, start, end, status
-      FROM events
-      WHERE status = 'pending'
-        AND (
-          (start >= ? AND start <= ?)
-          OR (end >= ? AND end <= ?)
-          OR (start <= ? AND end >= ?)
-        )
-    `;
-
-    const { results: events } = await env.DB.prepare(query)
-      .bind(startStr, endStr, startStr, endStr, startStr, endStr)
-      .all<Event>();
-
-    if (!events || events.length === 0) {
-      console.log("No pending events found for one week ahead");
-      return;
-    }
-
-    console.log(`Found ${events.length} events for processing`);
-
-    // Group overlapping events
-    const groups = groupOverlappingEvents(events);
-
-    // Process each group
-    for (const group of groups) {
-      if (group.length === 1) {
-        // No overlap, set status to confirm
-        await env.DB.prepare(
-          "UPDATE events SET status = 'confirm' WHERE id = ?"
-        ).bind(group[0].id).run();
-        console.log(`Event ${group[0].id} confirmed (no overlap)`);
-      } else {
-        // Overlapping events - perform lottery
-        const winner = selectWinner(group);
-        console.log(`Group of ${group.length} overlapping events, winner: ${winner.id}`);
-
-        // Set winner to confirm
-        await env.DB.prepare(
-          "UPDATE events SET status = 'confirm' WHERE id = ?"
-        ).bind(winner.id).run();
-
-        // Set losers to failed
-        const loserIds = group.filter(e => e.id !== winner.id).map(e => e.id);
-        if (loserIds.length > 0) {
-          const placeholders = loserIds.map(() => '?').join(',');
-          await env.DB.prepare(
-            `UPDATE events SET status = 'failed' WHERE id IN (${placeholders})`
-          ).bind(...loserIds).run();
-          console.log(`Events ${loserIds.join(', ')} failed (lost lottery)`);
-        }
-      }
-    }
-
-    console.log("Event status update completed");
+    await processEvents(env);
   },
 } satisfies ExportedHandler<Env>;
