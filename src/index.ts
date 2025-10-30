@@ -109,7 +109,7 @@ async function processEvents(env: Env): Promise<string> {
   const query = `
     SELECT id, start, end, status
     FROM events
-    WHERE status = 'pending'
+    WHERE status = 'Pending'
       AND (
         (start >= ? AND start <= ?)
         OR (end >= ? AND end <= ?)
@@ -122,7 +122,7 @@ async function processEvents(env: Env): Promise<string> {
     .all<Event>();
 
   if (!events || events.length === 0) {
-    const msg = "No pending events found for one week ahead";
+    const msg = "No Pending events found for one week ahead";
     console.log(msg);
     logMessages.push(msg);
     return logMessages.join('\n');
@@ -139,11 +139,11 @@ async function processEvents(env: Env): Promise<string> {
   // Process each group
   for (const group of groups) {
     if (group.length === 1) {
-      // No overlap, set status to confirm
+      // No overlap, set status to Approved
       await env.DB.prepare(
-        "UPDATE events SET status = 'confirm' WHERE id = ?"
+        "UPDATE events SET status = 'Approved' WHERE id = ?"
       ).bind(group[0].id).run();
-      const msg = `Event ${group[0].id} confirmed (no overlap)`;
+      const msg = `Event ${group[0].id} approved (no overlap)`;
       console.log(msg);
       logMessages.push(msg);
     } else {
@@ -153,19 +153,19 @@ async function processEvents(env: Env): Promise<string> {
       console.log(msg);
       logMessages.push(msg);
 
-      // Set winner to confirm
+      // Set winner to Approved
       await env.DB.prepare(
-        "UPDATE events SET status = 'confirm' WHERE id = ?"
+        "UPDATE events SET status = 'Approved' WHERE id = ?"
       ).bind(winner.id).run();
 
-      // Set losers to failed
+      // Set losers to UnApproved
       const loserIds = group.filter(e => e.id !== winner.id).map(e => e.id);
       if (loserIds.length > 0) {
         const placeholders = loserIds.map(() => '?').join(',');
         await env.DB.prepare(
-          `UPDATE events SET status = 'failed' WHERE id IN (${placeholders})`
+          `UPDATE events SET status = 'UnApproved' WHERE id IN (${placeholders})`
         ).bind(...loserIds).run();
-        const msg = `Events ${loserIds.join(', ')} failed (lost lottery)`;
+        const msg = `Events ${loserIds.join(', ')} unapproved (lost lottery)`;
         console.log(msg);
         logMessages.push(msg);
       }

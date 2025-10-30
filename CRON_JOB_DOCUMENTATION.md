@@ -14,16 +14,16 @@ The worker includes a scheduled job that runs daily at midnight to process event
 
 ### Processing Logic
 
-1. **Query Events**: Selects all events with status='pending' where start or end dates fall within one week from now
+1. **Query Events**: Selects all events with status='Pending' where start or end dates fall within one week from now
 
 2. **Overlap Detection**: Uses Union-Find algorithm to group overlapping events, including transitive overlaps
    - Example: If Event A overlaps with Event B, and Event B overlaps with Event C, all three events are grouped together even if A and C don't directly overlap
 
 3. **Lottery System**: For each group of overlapping events:
-   - **Single event**: Automatically set to `status='confirm'`
+   - **Single event**: Automatically set to `status='Approved'`
    - **Multiple overlapping events**: Random lottery selection
-     - Winner: `status='confirm'`
-     - Losers: `status='failed'`
+     - Winner: `status='Approved'`
+     - Losers: `status='UnApproved'`
 
 ### Database Schema
 
@@ -32,15 +32,15 @@ CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     start DATETIME NOT NULL,
     end DATETIME NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'Pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 ### Status Values
-- `pending`: Initial state, awaiting processing
-- `confirm`: Event confirmed (no overlap or won lottery)
-- `failed`: Event failed (lost lottery to overlapping event)
+- `Pending`: Initial state, awaiting processing
+- `Approved`: Event approved (no overlap or won lottery)
+- `UnApproved`: Event unapproved (lost lottery to overlapping event)
 
 ## Testing
 
@@ -65,8 +65,8 @@ This endpoint returns:
     "Found 3 events for processing",
     "Grouped into 2 group(s)",
     "Group of 2 overlapping events, winner: 1",
-    "Events 2 failed (lost lottery)",
-    "Event 3 confirmed (no overlap)",
+    "Events 2 unapproved (lost lottery)",
+    "Event 3 approved (no overlap)",
     "Event status update completed"
   ],
   "events": [...]
@@ -124,7 +124,7 @@ Uses Union-Find (Disjoint Set Union) data structure with path compression:
 ```
 Event A: 9:00-11:00
 Event B: 10:00-12:00
-Result: Random selection, one confirms, one fails
+Result: Random selection, one approves, one gets unapproved
 ```
 
 ### Scenario 2: Transitive Overlap
@@ -132,14 +132,14 @@ Result: Random selection, one confirms, one fails
 Event A: 9:00-10:00
 Event B: 9:30-10:30  (overlaps both A and C)
 Event C: 10:00-11:00
-Result: All three in same group, one random winner, two fail
+Result: All three in same group, one random winner, two unapproved
 ```
 
 ### Scenario 3: No Overlap
 ```
 Event A: 9:00-11:00
 Event B: 14:00-16:00
-Result: Both automatically confirmed
+Result: Both automatically approved
 ```
 
 ### Scenario 4: Outside Time Window
@@ -147,5 +147,5 @@ Result: Both automatically confirmed
 Current date: Oct 30
 Event A: Nov 1 (only 2 days ahead)
 Event B: Nov 15 (15 days ahead)
-Result: Both ignored, remain pending
+Result: Both ignored, remain Pending
 ```
