@@ -1,0 +1,16 @@
+{
+  "compatibility_date": "2025-10-08",
+  "main": "src/index.ts",
+  "name": "cron-c4",
+  "upload_source_maps": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "3d6f23ae-f564-4375-b40e-d3859afc173b",
+      "database_name": "c4"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
