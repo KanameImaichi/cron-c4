@@ -7,6 +7,13 @@ interface Event {
   status: string;
 }
 
+// Helper function to format date for SQLite compatibility
+// SQLite stores dates as 'YYYY-MM-DD HH:MM:SS.SSS' format (space separator, no timezone)
+// JavaScript's toISOString() returns 'YYYY-MM-DDTHH:MM:SS.SSSZ' format (T separator, Z timezone)
+function formatDateForSQLite(date: Date): string {
+  return date.toISOString().replace('T', ' ').replace('Z', '');
+}
+
 // Check if two events overlap
 function eventsOverlap(event1: Event, event2: Event): boolean {
   const start1 = new Date(event1.start).getTime();
@@ -17,31 +24,62 @@ function eventsOverlap(event1: Event, event2: Event): boolean {
   return start1 < end2 && start2 < end1;
 }
 
-// Group events by overlapping periods
+// Group events by overlapping periods using Union-Find algorithm
+// This handles transitive overlaps correctly (A overlaps B, B overlaps C => A, B, C in same group)
 function groupOverlappingEvents(events: Event[]): Event[][] {
-  const groups: Event[][] = [];
-  const processed = new Set<number>();
-
+  if (events.length === 0) return [];
+  
+  // Union-Find data structure
+  const parent = new Map<number, number>();
+  
+  // Initialize each event as its own parent
+  for (const event of events) {
+    parent.set(event.id, event.id);
+  }
+  
+  // Find root with path compression
+  function find(id: number): number {
+    const parentId = parent.get(id);
+    if (parentId === undefined) {
+      throw new Error(`Event ID ${id} not found in parent map`);
+    }
+    if (parentId !== id) {
+      parent.set(id, find(parentId));
+    }
+    return parent.get(id)!; // Safe to use ! here as we just set it
+  }
+  
+  // Union two events
+  function union(id1: number, id2: number): void {
+    const root1 = find(id1);
+    const root2 = find(id2);
+    if (root1 !== root2) {
+      parent.set(root2, root1);
+    }
+  }
+  
+  // Check all pairs and union overlapping events
   for (let i = 0; i < events.length; i++) {
-    if (processed.has(events[i].id)) continue;
-
-    const group: Event[] = [events[i]];
-    processed.add(events[i].id);
-
     for (let j = i + 1; j < events.length; j++) {
-      if (processed.has(events[j].id)) continue;
-
-      // Check if this event overlaps with any event in the current group
-      if (group.some(event => eventsOverlap(event, events[j]))) {
-        group.push(events[j]);
-        processed.add(events[j].id);
+      if (eventsOverlap(events[i], events[j])) {
+        union(events[i].id, events[j].id);
       }
     }
-
-    groups.push(group);
   }
-
-  return groups;
+  
+  // Group events by their root
+  const groups = new Map<number, Event[]>();
+  for (const event of events) {
+    const root = find(event.id);
+    const group = groups.get(root);
+    if (group === undefined) {
+      groups.set(root, [event]);
+    } else {
+      group.push(event);
+    }
+  }
+  
+  return Array.from(groups.values());
 }
 
 // Perform lottery: select one winner from a group
@@ -61,9 +99,8 @@ async function processEvents(env: Env): Promise<string> {
   const oneWeekEnd = new Date(oneWeekStart);
   oneWeekEnd.setHours(23, 59, 59, 999);
 
-  // Convert to SQLite-compatible format (space instead of T, no Z)
-  const startStr = oneWeekStart.toISOString().replace('T', ' ').replace('Z', '');
-  const endStr = oneWeekEnd.toISOString().replace('T', ' ').replace('Z', '');
+  const startStr = formatDateForSQLite(oneWeekStart);
+  const endStr = formatDateForSQLite(oneWeekEnd);
 
   let logMessages: string[] = [];
   logMessages.push(`Processing events between ${startStr} and ${endStr}`);
