@@ -7,6 +7,28 @@ interface Event {
   status: string;
 }
 
+interface EventLog {
+  id: number;
+  event_id: number;
+  old_status: string;
+  new_status: string;
+  change_reason: string | null;
+  changed_at: string;
+}
+
+// Helper function to log event status changes
+async function logEventChange(
+  env: Env, 
+  eventId: number, 
+  oldStatus: string, 
+  newStatus: string, 
+  reason: string
+): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO event_logs (event_id, old_status, new_status, change_reason) VALUES (?, ?, ?, ?)"
+  ).bind(eventId, oldStatus, newStatus, reason).run();
+}
+
 // Helper function to format date for SQLite compatibility
 // SQLite stores dates as 'YYYY-MM-DD HH:MM:SS.SSS' format (space separator, no timezone)
 // JavaScript's toISOString() returns 'YYYY-MM-DDTHH:MM:SS.SSSZ' format (T separator, Z timezone)
@@ -140,10 +162,15 @@ async function processEvents(env: Env): Promise<string> {
   for (const group of groups) {
     if (group.length === 1) {
       // No overlap, set status to Approved
+      const event = group[0];
       await env.DB.prepare(
         "UPDATE events SET status = 'Approved' WHERE id = ?"
-      ).bind(group[0].id).run();
-      const msg = `Event ${group[0].id} approved (no overlap)`;
+      ).bind(event.id).run();
+      
+      // Log the status change
+      await logEventChange(env, event.id, event.status, 'Approved', 'No overlap with other events');
+      
+      const msg = `Event ${event.id} approved (no overlap)`;
       console.log(msg);
       logMessages.push(msg);
     } else {
@@ -157,14 +184,24 @@ async function processEvents(env: Env): Promise<string> {
       await env.DB.prepare(
         "UPDATE events SET status = 'Approved' WHERE id = ?"
       ).bind(winner.id).run();
+      
+      // Log the winner's status change
+      await logEventChange(env, winner.id, winner.status, 'Approved', `Won lottery among ${group.length} overlapping events`);
 
       // Set losers to UnApproved
-      const loserIds = group.filter(e => e.id !== winner.id).map(e => e.id);
-      if (loserIds.length > 0) {
+      const losers = group.filter(e => e.id !== winner.id);
+      if (losers.length > 0) {
+        const loserIds = losers.map(e => e.id);
         const placeholders = loserIds.map(() => '?').join(',');
         await env.DB.prepare(
           `UPDATE events SET status = 'UnApproved' WHERE id IN (${placeholders})`
         ).bind(...loserIds).run();
+        
+        // Log each loser's status change
+        for (const loser of losers) {
+          await logEventChange(env, loser.id, loser.status, 'UnApproved', `Lost lottery to event ${winner.id}`);
+        }
+        
         const msg = `Events ${loserIds.join(', ')} unapproved (lost lottery)`;
         console.log(msg);
         logMessages.push(msg);
@@ -191,12 +228,32 @@ export default {
       const { results: allEvents } = await env.DB.prepare(
         "SELECT id, start, end, status FROM events ORDER BY id"
       ).all<Event>();
+      
+      // Show event logs
+      const { results: eventLogs } = await env.DB.prepare(
+        "SELECT * FROM event_logs ORDER BY changed_at DESC LIMIT 50"
+      ).all<EventLog>();
 
       return new Response(
         JSON.stringify({
           log: log.split('\n'),
-          events: allEvents
+          events: allEvents,
+          eventLogs: eventLogs
         }, null, 2),
+        {
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+
+    // Endpoint to view event logs
+    if (url.pathname === '/event-logs') {
+      const { results: eventLogs } = await env.DB.prepare(
+        "SELECT * FROM event_logs ORDER BY changed_at DESC LIMIT 100"
+      ).all<EventLog>();
+
+      return new Response(
+        JSON.stringify(eventLogs, null, 2),
         {
           headers: { "content-type": "application/json" },
         }

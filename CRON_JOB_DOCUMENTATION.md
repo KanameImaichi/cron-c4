@@ -35,7 +35,26 @@ CREATE TABLE events (
     status TEXT NOT NULL DEFAULT 'Pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE event_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL,
+    old_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    change_reason TEXT,
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES events(id)
+);
 ```
+
+### Event Logging
+
+The system automatically logs all event status changes to the `event_logs` table. Each log entry contains:
+- `event_id`: The ID of the event that was changed
+- `old_status`: The previous status of the event
+- `new_status`: The new status of the event
+- `change_reason`: A description of why the status was changed (e.g., "Won lottery among 2 overlapping events", "Lost lottery to event 1", "No overlap with other events")
+- `changed_at`: Timestamp when the change occurred
 
 ### Status Values
 - `Pending`: Initial state, awaiting processing
@@ -55,6 +74,17 @@ GET /test-scheduled
 This endpoint returns:
 - Processing logs
 - Current state of all events
+- Event logs (recent changes)
+
+### Viewing Event Logs
+
+You can view all event status change logs by accessing:
+
+```
+GET /event-logs
+```
+
+This endpoint returns the most recent 100 event log entries, ordered by timestamp (newest first).
 
 ### Example Response
 
@@ -69,7 +99,25 @@ This endpoint returns:
     "Event 3 approved (no overlap)",
     "Event status update completed"
   ],
-  "events": [...]
+  "events": [...],
+  "eventLogs": [
+    {
+      "id": 1,
+      "event_id": 1,
+      "old_status": "Pending",
+      "new_status": "Approved",
+      "change_reason": "Won lottery among 2 overlapping events",
+      "changed_at": "2025-10-31 23:02:09"
+    },
+    {
+      "id": 2,
+      "event_id": 2,
+      "old_status": "Pending",
+      "new_status": "UnApproved",
+      "change_reason": "Lost lottery to event 1",
+      "changed_at": "2025-10-31 23:02:09"
+    }
+  ]
 }
 ```
 
