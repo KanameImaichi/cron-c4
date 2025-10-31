@@ -163,12 +163,14 @@ async function processEvents(env: Env): Promise<string> {
     if (group.length === 1) {
       // No overlap, set status to Approved
       const event = group[0];
+      const oldStatus = event.status; // Capture old status before update
+      
       await env.DB.prepare(
         "UPDATE events SET status = 'Approved' WHERE id = ?"
       ).bind(event.id).run();
       
       // Log the status change
-      await logEventChange(env, event.id, event.status, 'Approved', 'No overlap with other events');
+      await logEventChange(env, event.id, oldStatus, 'Approved', 'No overlap with other events');
       
       const msg = `Event ${event.id} approved (no overlap)`;
       console.log(msg);
@@ -176,6 +178,7 @@ async function processEvents(env: Env): Promise<string> {
     } else {
       // Overlapping events - perform lottery
       const winner = selectWinner(group);
+      const winnerOldStatus = winner.status; // Capture old status before update
       const msg = `Group of ${group.length} overlapping events, winner: ${winner.id}`;
       console.log(msg);
       logMessages.push(msg);
@@ -186,7 +189,7 @@ async function processEvents(env: Env): Promise<string> {
       ).bind(winner.id).run();
       
       // Log the winner's status change
-      await logEventChange(env, winner.id, winner.status, 'Approved', `Won lottery among ${group.length} overlapping events`);
+      await logEventChange(env, winner.id, winnerOldStatus, 'Approved', `Won lottery among ${group.length} overlapping events`);
 
       // Set losers to UnApproved
       const losers = group.filter(e => e.id !== winner.id);
@@ -199,7 +202,8 @@ async function processEvents(env: Env): Promise<string> {
         
         // Log each loser's status change
         for (const loser of losers) {
-          await logEventChange(env, loser.id, loser.status, 'UnApproved', `Lost lottery to event ${winner.id}`);
+          const loserOldStatus = loser.status; // Capture old status before update
+          await logEventChange(env, loser.id, loserOldStatus, 'UnApproved', `Lost lottery to event ${winner.id}`);
         }
         
         const msg = `Events ${loserIds.join(', ')} unapproved (lost lottery)`;
